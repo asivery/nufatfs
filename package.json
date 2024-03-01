@@ -1,0 +1,29 @@
+{
+  "name": "nufatfs",
+  "version": "0.1.0",
+  "description": "A new async-friendly library for accessing FAT16 and FAT32 filesystems",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/asivery/nufatfs.git"
+  },
+  "keywords": [
+    "fat",
+    "fat32",
+    "fatfs",
+    "mass-storage"
+  ],
+  "author": "asivery",
+  "license": "GPL-2.0",
+  "bugs": {
+    "url": "https://github.com/asivery/nufatfs/issues"
+  },
+  "homepage": "https://github.com/asivery/nufatfs#readme",
+  "devDependencies": {
+    "@types/node": "^20.11.17",
+    "typescript": "^5.3.3"
+  }
+}

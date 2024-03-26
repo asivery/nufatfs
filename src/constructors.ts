@@ -1,7 +1,8 @@
 import { BaseBootSectorInfo, Fat32Extension, FatBootInfo, FatFSDirectoryEntry, FatFSInformation } from "./types";
-import { structFormatUnpack } from "./utils";
+import { nameNormalTo83, structFormatUnpack } from "./utils";
 
 const textDecoder = new TextDecoder();
+const textEncoder = new TextEncoder();
 
 export function createBootSectorInfo(input: Uint8Array, offset?: number): BaseBootSectorInfo {
     const data = structFormatUnpack("<3x8sHBHBHHBHHHII", input, offset) as any[];
@@ -72,7 +73,24 @@ export function createFatFSDirectoryEntry(input: Uint8Array, offset?: number): F
         writtenDate: data[6],
         firstClusterAddressLow: data[7],
         fileSize: data[8],
+
         _filenameStr: textDecoder.decode(data[0]),
         _lfns: 0,
     };
+}
+
+export function serializeFatFSDirectoryEntry(input: FatFSDirectoryEntry): Uint8Array {
+    const data = new Uint8Array(32);
+    const dataView = new DataView(data.buffer);
+    data.set(textEncoder.encode(input._filenameStr), 0);
+    data[11] = input.attribs;
+    data[12] = input.reserved;
+    data.set(input.creationDate, 13);
+    data.set(input.accessedDate, 18);
+    dataView.setUint16(20, input.firstClusterAddressHigh, true);
+    data.set(input.writtenDate, 22);
+    dataView.setUint16(26, input.firstClusterAddressLow, true);
+    dataView.setUint32(28, input.fileSize, true);
+    // 28 + 4 = 32
+    return data;
 }

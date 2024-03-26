@@ -34,7 +34,7 @@ export class Chain {
 
     private get cursor() { return this._cursor; }
 
-    constructor(protected links: ChainLink[], protected allocateLink?: () => Promise<ChainLink>){
+    constructor(protected links: ChainLink[], protected allocateLink?: (lastLink: ChainLink) => Promise<ChainLink>){
         this.writable = links.every(e => !!e.write);
         this.cursor = 0;
     }
@@ -87,7 +87,7 @@ export class Chain {
                 throw new ChainError("No space!");
             }
             
-            let newLink = await this.allocateLink();
+            let newLink = await this.allocateLink(this.links[this.links.length - 1]);
             wholeChainLength += newLink.length;
             this.links.push(newLink);
         }
@@ -113,5 +113,9 @@ export class Chain {
                 this._cursor += thisLinkCount;
             }
         }
+    }
+
+    async flushWritingBuffer(){
+        // TODO
     }
 }

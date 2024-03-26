@@ -1,8 +1,9 @@
-import { Chain } from "./chained-structures";
+import { Chain, ChainLink } from "./chained-structures";
+import { ClusterAllocator } from "./cluster-allocator";
 import { ClusterChainLink } from "./cluster-chain";
-import { createBootSectorInfo, createFat32ExtendedInfo, createFatBootInfo, createFatFSDirectoryEntry, createFatFsInformation } from "./constructors";
+import { createBootSectorInfo, createFat32ExtendedInfo, createFatBootInfo, createFatFSDirectoryEntry, createFatFsInformation, serializeFatFSDirectoryEntry } from "./constructors";
 import { BaseBootSectorInfo, Driver, Fat32Extension, FatBootInfo, FatFSDirectoryEntry, FatFSDirectoryEntryAttributes, FatFSInformation } from "./types";
-import { arraysEq, structFormatUnpack } from "./utils";
+import { arraysEq, name83toNormal, namesEqual, structFormatUnpack } from "./utils";
 
 export class FatError extends Error {}
 
@@ -22,45 +23,22 @@ const forbiddenAttribsForFile =
     FatFSDirectoryEntryAttributes.VolumeLabel;
 
 
-function splitExt(name: string): [string, string]{
-    const index = name.lastIndexOf('.');
-    return index === -1 ? [name, ''] : [name.slice(0, index), name.slice(index + 1)];
-}
-
-function splitExt83(name: string): [string, string]{
-    if(name.length !== 8+3){
-        throw new FatError("Invalid 8.3 file name");
-    }
-    return [name.slice(0, 8).trim(), name.slice(8).trim()];
-}
-
-function name83toNormal(_name: string){
-    const [name, ext] = splitExt83(_name);
-    return ext === '' ? name : (name + '.' + ext);
-}
-
-function namesEqual(normalName: string, name83: string){
-    const [name1, ext1] = splitExt(normalName);
-    const [name2, ext2] = splitExt83(name83);
-    return name1.toLowerCase() === name2.toLowerCase() && ext1.toLowerCase() === ext2.toLowerCase();
-}
-
 export class CachedDirectory {
-    private directoryEntries?: CachedFatDirectoryEntry[];
-    constructor(private fat: LowLevelFatFilesystem, private underlying: FatFSDirectoryEntry | null){}
+    public rawDirectoryEntries?: CachedFatDirectoryEntry[];
+    constructor(private fat: LowLevelFatFilesystem, public initialCluster: number, public underlying: FatFSDirectoryEntry | null){}
     public async getEntries(): Promise<CachedFatDirectoryEntry[]>{
-        if(!this.directoryEntries){
+        if(!this.rawDirectoryEntries){
             // Load it all first
             const initialCluster = this.underlying!.firstClusterAddressLow | (this.underlying!.firstClusterAddressHigh << 16);
             const rawEntries = await this.fat.readAndConsumeAllDirectoryEntries(initialCluster);
-            this.directoryEntries = rawEntries.map((e: FatFSDirectoryEntry) => {
+            this.rawDirectoryEntries = rawEntries.map((e: FatFSDirectoryEntry) => {
                 if(e.attribs & FatFSDirectoryEntryAttributes.Directory){
-                    return new CachedDirectory(this.fat, e);
+                    return new CachedDirectory(this.fat, initialCluster, e);
                 }
                 return e;
-            })
+            });
         }
-        return this.directoryEntries;
+        return this.rawDirectoryEntries;
     }
 
     public async findEntry(name: string, typeRequired?: 'directory' | 'file'){
@@ -89,11 +67,11 @@ export class CachedDirectory {
         }).filter(e => typeof e === 'string') as string[];
     }
 
-    static readyMade(fat: LowLevelFatFilesystem, entries: FatFSDirectoryEntry[], underlying: FatFSDirectoryEntry | null){
-        const entry = new CachedDirectory(fat, underlying ?? null);
-        entry.directoryEntries = entries.map((e: FatFSDirectoryEntry) => {
+    static readyMade(fat: LowLevelFatFilesystem, entries: FatFSDirectoryEntry[], initialCluster: number, underlying: FatFSDirectoryEntry | null){
+        const entry = new CachedDirectory(fat, initialCluster, underlying ?? null);
+        entry.rawDirectoryEntries = entries.map((e: FatFSDirectoryEntry) => {
             if(e.attribs & FatFSDirectoryEntryAttributes.Directory){
-                return new CachedDirectory(fat, e);
+                return new CachedDirectory(fat, initialCluster, e);
             }
             return e;
         });
@@ -115,8 +93,10 @@ export class LowLevelFatFilesystem {
     writeFATClusterEntry?: (number: number, next: number) => void;
     readFATClusterEntry?: (number: number) => number;
 
-
     fatContents?: DataView;
+
+    private alteredDirectoryEntries: CachedDirectory[] = [];
+    private allocator: ClusterAllocator = new ClusterAllocator();
 
     private clusterToSector(cluster: number){
         // cluster - 2:
@@ -198,10 +178,20 @@ export class LowLevelFatFilesystem {
         // Else, read the directory table from 32extension
         if(this.isFat16){
             let rootSectorLength = (this.bootsectorInfo!.deprecatedMaxRootDirEntries * 32) / this.driver.sectorSize;
-            this.root = CachedDirectory.readyMade(this, await this.consumeAllDirectoryEntries(await this.driver.readSectors(this.dataSectorOffset, rootSectorLength)), null);
+            // -1 as initialSector for root directory location:
+            // In FAT16, there's a limited amount of entries that can be stored in the root.
+            // That limit is defined in the filesystem's bootsectorInfo, so it can't be changed.
+            // Therefore, the allocator that in the case of the FAT32 FS would extend the root dir's
+            // chains by providing new links has to be disabled.
+            this.root = CachedDirectory.readyMade(this, await this.consumeAllDirectoryEntries(await this.driver.readSectors(this.dataSectorOffset, rootSectorLength)), -1, null);
         }else{
-            this.root = CachedDirectory.readyMade(this, await this.readAndConsumeAllDirectoryEntries(this.fat32Extension!.rootDirCluster), null);
+            const rootCluster = this.fat32Extension!.rootDirCluster;
+            this.root = CachedDirectory.readyMade(this, await this.readAndConsumeAllDirectoryEntries(rootCluster), rootCluster, null);
         }
+    }
+
+    public markAsAltered(entry: CachedDirectory){
+        this.alteredDirectoryEntries.push(entry);
     }
 
     private async consumeAllDirectoryEntries(data: Uint8Array): Promise<FatFSDirectoryEntry[]> {
@@ -239,7 +229,7 @@ export class LowLevelFatFilesystem {
         return links;
     }
 
-    public constructClusterChain(initialCluster: number, limitLength: number = Number.MAX_SAFE_INTEGER){
+    public constructClusterChain(initialCluster: number, enableAllocator = true, limitLength: number = Number.MAX_SAFE_INTEGER){
         // TODO: For writing - allocator
         const defaultLength = this.bootsectorInfo!.logicalSectorsPerCluster * this.driver.sectorSize;
         const clusterChain = this.getClusterChainFromFAT(initialCluster);
@@ -250,7 +240,7 @@ export class LowLevelFatFilesystem {
             links.push(new ClusterChainLink(this, link, length));
             if(limitLength <= 0) break;
         }
-        return new Chain(links);
+        return new Chain(links, enableAllocator ? this.allocator.allocate.bind(this.allocator) : undefined);
     }
 
     public async readAndConsumeAllDirectoryEntries(initialCluster: number) {
@@ -299,6 +289,36 @@ export class LowLevelFatFilesystem {
         for(let i = 0; i<this.bootsectorInfo!.fatCount; i++) {
             await this.driver.writeSectors!(this.bootsectorInfo!.reservedLogicalSectors + i * this.fatContents!.byteLength, fatContents);
         }
+
+        // Rebuild all the altered directory entries.
+        for(let entry of this.alteredDirectoryEntries){
+            let writingChain;
+            if(entry.initialCluster === -1) {
+                // Root cluster on FAT16. Do not use an allocator. Instead fake this chain.
+                let rootSectorLength = (this.bootsectorInfo!.deprecatedMaxRootDirEntries * 32) / this.driver.sectorSize;
+                const that = this;
+                writingChain = new Chain([ {
+                    length: rootSectorLength,
+                    async read(){
+                        // This will be the structure on which the new data will be overlayed
+                        // By returning zeros here, we make sure there's no outdated data in the root directory
+                        return new Uint8Array(rootSectorLength).fill(0);
+                    },
+                    async write(data: Uint8Array){
+                        await that.driver.writeSectors!(that.dataSectorOffset, data);
+                    }
+                } ]);
+            }else{
+                writingChain = this.constructClusterChain(entry.initialCluster);
+            }
+            
+            for(let subentry of await entry.getEntries()){
+                let raw = subentry instanceof CachedDirectory ? subentry.underlying! : subentry;
+                writingChain.write(serializeFatFSDirectoryEntry(raw));
+            }
+            await writingChain.flushWritingBuffer();
+        }
+        this.alteredDirectoryEntries = [];
     }
 
     public static async _create(driver: Driver){

@@ -1,6 +1,7 @@
 import { CachedDirectory, CachedFatDirectoryEntry, FatError, LowLevelFatFilesystem } from "./low-level";
 import { Chain } from "./chained-structures";
 import { Driver, FatFSDirectoryEntry } from "./types";
+import { nameNormalTo83 } from "./utils";
 
 export class FatFilesystem {
     private constructor(private fat: LowLevelFatFilesystem){}
@@ -31,7 +32,7 @@ export class FatFilesystem {
         }
         const entry = await this.traverse(path);
         if(!entry || entry instanceof CachedDirectory) return null;
-        const chain = this.fat.constructClusterChain(entry.firstClusterAddressLow | entry.firstClusterAddressHigh << 16, entry.fileSize);
+        const chain = this.fat.constructClusterChain(entry.firstClusterAddressLow | entry.firstClusterAddressHigh << 16, true, entry.fileSize);
         return new FatFSFileHandle(chain, writable, entry);
     }
 
@@ -48,13 +49,37 @@ export class FatFilesystem {
     }
 
     public async rename(path: string, newPath: string) {
-        const entry = await this.traverse(path);
         let lastSlash = newPath.lastIndexOf("/");
-        const parentOfNew = newPath.slice(0, lastSlash);
+        const newParentPath = newPath.slice(0, lastSlash);
         const newName = newPath.slice(lastSlash + 1);
-        const parent = await this.traverse(parentOfNew);
+        const newParent = await this.traverse(newParentPath) as CachedDirectory;
 
-        
+        const entry = await this.traverse(path);
+        lastSlash = newPath.lastIndexOf("/");
+        let oldParentPath = path.slice(0, lastSlash);
+        const oldParent = await this.traverse(oldParentPath) as CachedDirectory;
+
+        if(!(newParent instanceof CachedDirectory) || !(newParent instanceof CachedDirectory)){
+            throw new FatError("Cannot move an entry into a file, not a directory!");
+        }
+        if(!entry) throw new FatError("File doens't exist!");
+        let rawEntry = entry instanceof CachedDirectory ? entry.underlying! : entry;
+        // Update name
+        rawEntry._filenameStr = nameNormalTo83(newName);
+        // Renaming will strip LFNs, since we can't encode them yet.
+        // Cache
+        await oldParent.getEntries();
+        let thisEntryIndex = oldParent.rawDirectoryEntries!.indexOf(entry);
+        // Remove both the actual entry reference, and the LFNs that point to it
+        oldParent.rawDirectoryEntries!.splice(thisEntryIndex - rawEntry._lfns, 1 + rawEntry._lfns);
+        rawEntry._lfns = 0;
+        // Mark oldParent as in need of a flush
+        this.fat.markAsAltered(oldParent);
+        // Cache
+        await newParent.getEntries();
+        newParent.rawDirectoryEntries!.push(entry);
+        // Mark newParent as in need of a flush
+        this.fat.markAsAltered(newParent);
     }
 
     public async flushMetadataChanges(){

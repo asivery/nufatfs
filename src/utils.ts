@@ -1,3 +1,5 @@
+import { FatError } from "./low-level";
+
 export type StructFormatResult = string | number | Uint8Array;
 
 enum Endianness {
@@ -82,4 +84,35 @@ export function arraysEq<T>(a: ArrayLike<T>, b: ArrayLike<T>){
         if(a[i] !== b[i]) return false;
     }
     return true;
+}
+
+export function splitExt(name: string): [string, string]{
+    const index = name.lastIndexOf('.');
+    return index === -1 ? [name, ''] : [name.slice(0, index), name.slice(index + 1)];
+}
+
+export function splitExt83(name: string): [string, string]{
+    if(name.length !== 8+3){
+        throw new FatError("Invalid 8.3 file name");
+    }
+    return [name.slice(0, 8).trim(), name.slice(8).trim()];
+}
+
+export function name83toNormal(_name: string){
+    const [name, ext] = splitExt83(_name);
+    return ext === '' ? name : (name + '.' + ext);
+}
+
+export function namesEqual(normalName: string, name83: string){
+    const [name1, ext1] = splitExt(normalName);
+    const [name2, ext2] = splitExt83(name83);
+    return name1.toLowerCase() === name2.toLowerCase() && ext1.toLowerCase() === ext2.toLowerCase();
+}
+
+export function nameNormalTo83(normalName: string): string {
+    let [name, ext] = splitExt(normalName);
+    if(name.length > 8) name = name.substring(0, 8);
+    for(let i = name.length; i<8; i++) name += ' ';
+    name += ext;
+    return name;
 }

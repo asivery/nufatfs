@@ -1,8 +1,11 @@
-import { CachedDirectory, CachedFatDirectoryEntry, FatError, LowLevelFatFilesystem } from "./low-level";
+import { CachedDirectory, FatError, FAT_MARKER_DELETED, LowLevelFatFilesystem } from "./low-level";
 import { Chain } from "./chained-structures";
-import { Driver, FatFSDirectoryEntry } from "./types";
+import { Driver, FatFSDirectoryEntry, FatFSDirectoryEntryAttributes } from "./types";
 import { nameNormalTo83 } from "./utils";
+import { ClusterChainLink } from "./cluster-chain";
+import { newFatFSDirectoryEntry } from "./constructors";
 
+// This class aims to contain the demons stored in LowLevelFatFilesystem.
 export class FatFilesystem {
     private constructor(private fat: LowLevelFatFilesystem){}
     public static async create(driver: Driver){
@@ -10,54 +13,99 @@ export class FatFilesystem {
         return new FatFilesystem(fat);
     }
 
-    // TODO: LFN support!
-    private async traverse(path: string): Promise<CachedFatDirectoryEntry | null> {
-        while(path.startsWith("/")) path = path.substring(1);
-        const pathEntries = path.split("/").filter(e => e);
-        let currentRoot: CachedFatDirectoryEntry = this.fat.root!;
-        for(let i = 0; i<pathEntries.length; i++){
-            const next: CachedFatDirectoryEntry | null = await (currentRoot as CachedDirectory).findEntry(pathEntries[i]);
-            if(!next) return null;
-            if(i !== pathEntries.length - 1 && !(next instanceof CachedDirectory)){
-                return null;
-            }
-            currentRoot = next;
-        }
-        return currentRoot;
-    }
-
     public async open(path: string, writable: boolean = false): Promise<FatFSFileHandle | null>{
         if(writable && !this.fat.isWritable){
             throw new FatError("Cannot open a file for writing on a read-only volume!");
         }
-        const entry = await this.traverse(path);
-        if(!entry || entry instanceof CachedDirectory) return null;
+        const tree = await this.fat.traverseEntries(path);
+        if(!tree) return null;
+        const [parent, entry] = tree.slice(-2);
+        if(!parent || !entry || entry instanceof CachedDirectory) return null;
         const chain = this.fat.constructClusterChain(entry.firstClusterAddressLow | entry.firstClusterAddressHigh << 16, true, entry.fileSize);
-        return new FatFSFileHandle(chain, writable, entry);
+        return new FatFSFileHandle(this.fat, chain, writable, entry, parent as CachedDirectory);
+    }
+
+    public async create(path: string): Promise<FatFSFileHandle | null>{
+        const existingEntry = await this.fat.traverse(path);
+        if(existingEntry) {
+            return null;
+        }
+        let lastSlash = path.lastIndexOf("/");
+        const parentPath = path.slice(0, lastSlash);
+        const name = path.slice(lastSlash + 1);
+        const encName = nameNormalTo83(name);
+        const parent = await this.fat.traverse(parentPath);
+        if(!parent || !(parent instanceof CachedDirectory)) {
+            return null;
+        }
+        const entry: FatFSDirectoryEntry = newFatFSDirectoryEntry(encName, FatFSDirectoryEntryAttributes.None, 0, 0);
+        await parent.getEntries(); // Cache
+        parent.rawDirectoryEntries!.push(entry);
+        this.fat.markAsAltered(parent);
+        return new FatFSFileHandle(this.fat, this.fat.constructClusterChain(0, true), true, entry, parent);
     }
 
     public async listDir(path: string): Promise<string[] | null>{
-        const entry = await this.traverse(path);
+        const entry = await this.fat.traverse(path);
         if(!entry || !(entry instanceof CachedDirectory)) return null;
         return entry.listDir();
     }
 
     public async getSizeOf(path: string): Promise<null | number>{
-        const entry = await this.traverse(path);
+        const entry = await this.fat.traverse(path);
         if(!entry || (entry instanceof CachedDirectory)) return null;
         return entry.fileSize;
+    }
+
+    public getStats(): {totalClusters: number, totalBytes: number, freeClusters: number, freeBytes: number} {
+        const totalClusters = this.fat.allocator!.freemap.length;
+        const freeClusters = this.fat.allocator!.freemap.filter(e => e).length;
+        return {
+            totalClusters,
+            freeClusters,
+            totalBytes: totalClusters * this.fat.clusterSizeInBytes,
+            freeBytes: freeClusters * this.fat.clusterSizeInBytes,
+        };
+    }
+
+    public async delete(path: string) {
+        const tree = await this.fat.traverseEntries(path);
+        if(!tree) return null;
+        const [parent, entry] = tree.slice(-2);
+        if(entry instanceof CachedDirectory){
+            if((await entry.getEntries()).length > 0) {
+                throw new FatError("Cannot delete a non-empty directory.");
+            } 
+        }
+        if(!entry || !parent || !(parent instanceof CachedDirectory)) {
+            throw new FatError("File not found!");
+        }
+        let rawEntry = entry instanceof CachedDirectory ? entry.underlying! : entry;
+
+        // Mark as deleted
+        rawEntry.filename[0] = FAT_MARKER_DELETED;
+        // Ask the main driver to update this entry's parent
+        this.fat.markAsAltered(parent);
+        // Construct a chain, then free it
+        const cluster = rawEntry.firstClusterAddressLow | (rawEntry.firstClusterAddressHigh << 16);
+        const chain = this.fat.getClusterChainFromFAT(cluster);
+        this.fat.allocator!.addClusterListToFreelist(chain);
+        // Zero out the chain in FAT
+        for(let e of chain) {
+            this.fat.writeFATClusterEntry!(e, 0);
+        }
     }
 
     public async rename(path: string, newPath: string) {
         let lastSlash = newPath.lastIndexOf("/");
         const newParentPath = newPath.slice(0, lastSlash);
         const newName = newPath.slice(lastSlash + 1);
-        const newParent = await this.traverse(newParentPath) as CachedDirectory;
+        const newParent = await this.fat.traverse(newParentPath) as CachedDirectory;
 
-        const entry = await this.traverse(path);
+        const entry = await this.fat.traverse(path);
         lastSlash = newPath.lastIndexOf("/");
         let oldParentPath = path.slice(0, lastSlash);
-        const oldParent = await this.traverse(oldParentPath) as CachedDirectory;
+        const oldParent = await this.fat.traverse(oldParentPath) as CachedDirectory;
 
         if(!(newParent instanceof CachedDirectory) || !(newParent instanceof CachedDirectory)){
             throw new FatError("Cannot move an entry into a file, not a directory!");
@@ -92,10 +140,11 @@ export class FatFilesystem {
 }
 
 export class FatFSFileHandle {
-    public length: number;
-    constructor(private chain: Chain, private writable: boolean, private underlying: FatFSDirectoryEntry){
-        this.length = underlying.fileSize;
+    public get length(){
+        return this.chain.getTotalLength();
     }
+
+    constructor(private fat: LowLevelFatFilesystem, private chain: Chain<ClusterChainLink>, private writable: boolean, private underlying: FatFSDirectoryEntry, private parent: CachedDirectory){}
 
     seek(to: number){
         this.chain.seek(to);
@@ -110,10 +159,19 @@ export class FatFSFileHandle {
     }
 
     async close(){
-        // TODO
+        if(!this.writable) return;
+        await this.chain.flushChanges();
+        this.underlying.fileSize = this.chain.getTotalLength();
+        if(this.underlying.firstClusterAddressHigh === 0 && this.underlying.firstClusterAddressLow === 0 && this.underlying.fileSize) {
+            // This was an empty file before, but is not anymore
+            const rootCluster = this.chain.links[0].index!;
+            this.underlying.firstClusterAddressLow = rootCluster & 0xFFFF;
+            this.underlying.firstClusterAddressHigh = (rootCluster & 0xFFFF0000) >> 16;
+        }
+        this.fat.markAsAltered(this.parent);
     }
 
     async write(data: Uint8Array){
-        // TODO
+        return this.chain.write(data);
     }
 }

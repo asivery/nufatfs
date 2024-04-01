@@ -112,7 +112,9 @@ export function namesEqual(normalName: string, name83: string){
 export function nameNormalTo83(normalName: string): string {
     let [name, ext] = splitExt(normalName);
     if(name.length > 8) name = name.substring(0, 8);
+    if(ext.length > 3) ext = ext.substring(0, 3);
     for(let i = name.length; i<8; i++) name += ' ';
+    for(let i = ext.length; i<3; i++) ext += ' ';
     name += ext;
     return name;
 }

@@ -5,13 +5,15 @@ export interface ChainLink {
 }
 
 export class ChainError extends Error{}
+export type LinkAllocator<T> = (lastChainLink: T | null, bytes: number) => Promise<T[]>;
 
-export class Chain {
-    private currentLink?: ChainLink;
+export class Chain<T extends ChainLink> {
+    private currentLink?: T;
     private linkSubCursor?: number;
     private _cursor: number = 0;
     private linkIndex: number = 0;
     private writable: boolean;
+    private totalLength: number;
 
     private set cursor(n: number){
         this._cursor = n;
@@ -20,10 +22,10 @@ export class Chain {
         
         let currentLength = 0;
         let idx = 0;
-        for(let link of this.links){
-            if (currentLength >= n) {
+        for(let link of this._links){
+            if ((link.length + currentLength) > n) {
                 this.currentLink = link;
-                this.linkSubCursor = currentLength - n;
+                this.linkSubCursor = n - currentLength;
                 this.linkIndex = idx;
                 break;
             }
@@ -33,23 +35,31 @@ export class Chain {
     }
 
     private get cursor() { return this._cursor; }
+    public tell(){ return this.cursor; }
+    public getTotalLength(){ return this.totalLength; }
 
-    constructor(protected links: ChainLink[], protected allocateLink?: (lastLink: ChainLink) => Promise<ChainLink>){
-        this.writable = links.every(e => !!e.write);
+    public get links() { return this._links; }
+
+    constructor(protected _links: T[], protected allocateLink?: LinkAllocator<T>, protected readLimitSize?: number){
+        this.writable = _links.every(e => !!e.write);
         this.cursor = 0;
+        this.totalLength = readLimitSize ?? this.length();
     }
 
     length(): number {
-        return this.links.reduce((a, b) => a + b.length, 0);
+        return this._links.reduce((a, b) => a + b.length, 0);
     }
 
     seek(to: number, whence?: 'start' | 'cur' | 'end'): void {
+        // Regardless of the writing state, flush the buffer on-seek
         if(whence === 'start' || !whence) this.cursor = to;
         else if(whence === 'cur') this.cursor += to;
         else if(whence === 'end') this.cursor = this.length() - to;
     }
 
     async read(count: number): Promise<Uint8Array> {
+        count = Math.min(this.totalLength, count + this.cursor) - this.cursor;
+
         const ret = new Uint8Array(count);
         let currentLength = 0;
 
@@ -67,7 +77,7 @@ export class Chain {
                 // Advance link.
                 this.linkIndex++;
                 this.linkSubCursor -= this.currentLink.length;
-                this.currentLink = this.links[this.linkIndex];
+                this.currentLink = this._links[this.linkIndex];
                 this._cursor += limited.length;
             }
         }
@@ -76,6 +86,39 @@ export class Chain {
 
     async readAll(){
         return this.read(this.length() - this.cursor);
+    }
+
+    public async flushChanges(){
+        return this.flushWritingBuffer();
+    }
+    
+    private writingBuffer: Uint8Array | null = null;
+    private isNewByteArray: boolean[] | null = null;
+    private async flushWritingBuffer(){
+        // Rewrite the current link with writingBuffer
+        if(!this.writingBuffer) return;
+        if(!this.currentLink) throw new ChainError("Invalid chain state (Assertion 1)");
+        if(this.writingBuffer.length !== this.currentLink!.length) throw new ChainError("Invalid chain state (Assertion 2)");
+        // Rewrite.
+        // Depending on if we have any old bytes remaining, overlay the two buffers on one another. Otherwise just use the new one
+        const isUsingAnyOldBytes = this.isNewByteArray!.some(e => e === false);
+        let bufferToWrite;
+        if(isUsingAnyOldBytes) {
+            // Overlay
+            const originalData = await this.currentLink!.read();
+            for(let i = 0; i<originalData.length; i++){
+                if(this.isNewByteArray![i]) {
+                    originalData[i] = this.writingBuffer[i];
+                }
+            }
+            bufferToWrite = originalData;
+        } else {
+            // The new buffer is the absolute authority
+            bufferToWrite = this.writingBuffer;
+        }
+        await this.currentLink!.write!(bufferToWrite);
+        this.writingBuffer = null;
+        this.isNewByteArray = null;
     }
 
     async write(data: Uint8Array){
@@ -87,35 +130,41 @@ export class Chain {
                 throw new ChainError("No space!");
             }
             
-            let newLink = await this.allocateLink(this.links[this.links.length - 1]);
-            wholeChainLength += newLink.length;
-            this.links.push(newLink);
+            let newLinks = await this.allocateLink(this._links[this._links.length - 1] ?? null, (this.cursor + data.length) - wholeChainLength);
+            if(!newLinks) throw new ChainError("Allocator can't allocate more links!");
+
+            wholeChainLength += newLinks.reduce((a, b) => a + b.length, 0);
+            this._links.push.apply(this._links, newLinks);
+            // Update cursor
+            this.cursor = this.cursor;
         }
-
-        let incomingCursor = 0;
-
-        while(incomingCursor > data.length){
-            if(!this.currentLink || this.linkSubCursor === undefined) {
-                // Suddenly the chain got broken
-                throw new ChainError("Chain state changed within write()!");
+        
+        let incomingDataCursor = 0;
+        while(incomingDataCursor < data.length){
+            await this.cacheCurrentLinkForWriting();
+            // Find the largest possible chunk of data to merge onto the writing buffer.
+            const remainingSpaceInLinkDerivedFromCursor = this.currentLink!.length - this.linkSubCursor!;
+            const dataLengthForThisLink = Math.min(remainingSpaceInLinkDerivedFromCursor, data.length - incomingDataCursor);
+            // Get the slice.
+            const slice = data.slice(incomingDataCursor, incomingDataCursor + dataLengthForThisLink);
+            // Rewrite the slice to the new buffer, then advance
+            this.writingBuffer!.set(slice, this.linkSubCursor!);
+            this.isNewByteArray!.fill(true, this.linkSubCursor!, this.linkSubCursor! + slice.byteLength);
+            // Would setting this new cursor advance to next link?
+            if((this.linkSubCursor! + dataLengthForThisLink) >= this.currentLink!.length){
+                // Flush it.
+                await this.flushWritingBuffer();
             }
-            const thisLinkCount = Math.min(data.length - incomingCursor + this.linkSubCursor, this.currentLink.length);
-            const thisLinkNewContents = data.slice(incomingCursor, incomingCursor + thisLinkCount);
-            this.currentLink.write!(thisLinkNewContents);
-            incomingCursor += thisLinkCount;
-            this.linkSubCursor += thisLinkCount;
-
-            if(this.linkSubCursor >= this.currentLink.length){
-                // Advance link.
-                this.linkIndex++;
-                this.linkSubCursor -= this.currentLink.length;
-                this.currentLink = this.links[this.linkIndex];
-                this._cursor += thisLinkCount;
-            }
+            this.cursor += dataLengthForThisLink;
+            if(this.cursor > this.totalLength) this.totalLength = this.cursor;
+            incomingDataCursor += dataLengthForThisLink;
         }
     }
 
-    async flushWritingBuffer(){
-        // TODO
+    private async cacheCurrentLinkForWriting(){
+        if(!this.writingBuffer){
+            this.writingBuffer = new Uint8Array(this.currentLink!.length).fill(0);
+            this.isNewByteArray = Array<boolean>(this.writingBuffer.length).fill(false);
+        }
     }
 }

@@ -4,7 +4,7 @@
   "description": "A new async-friendly library for accessing FAT16 and FAT32 filesystems",
   "main": "dist/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc"
   },
   "repository": {
     "type": "git",
@@ -12,6 +12,7 @@
   },
   "keywords": [
     "fat",
+    "fat16",
     "fat32",
     "fatfs",
     "mass-storage"

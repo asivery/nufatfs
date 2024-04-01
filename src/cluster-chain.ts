@@ -15,6 +15,6 @@ export class ClusterChainLink implements ChainLink {
             data.fill(0, oldData.length);
             data.set(oldData, 0);
         }
-        this.fat.writeClusters(this.index, data);
+        await this.fat.writeClusters(this.index, data);
     }
 }

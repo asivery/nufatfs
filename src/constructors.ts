@@ -1,4 +1,4 @@
-import { BaseBootSectorInfo, Fat32Extension, FatBootInfo, FatFSDirectoryEntry, FatFSInformation } from "./types";
+import { BaseBootSectorInfo, Fat32Extension, FatBootInfo, FatFSDirectoryEntry, FatFSDirectoryEntryAttributes, FatFSInformation } from "./types";
 import { nameNormalTo83, structFormatUnpack } from "./utils";
 
 const textDecoder = new TextDecoder();
@@ -75,6 +75,23 @@ export function createFatFSDirectoryEntry(input: Uint8Array, offset?: number): F
         fileSize: data[8],
 
         _filenameStr: textDecoder.decode(data[0]),
+        _lfns: 0,
+    };
+}
+
+export function newFatFSDirectoryEntry(name83: string, attribs: FatFSDirectoryEntryAttributes, rootCluster: number, fileSize: number): FatFSDirectoryEntry {
+    return {
+        filename: textEncoder.encode(name83),
+        attribs,
+        reserved: 0,
+        creationDate: new Uint8Array(5).fill(0),
+        accessedDate: new Uint8Array(2).fill(0),
+        firstClusterAddressHigh: (rootCluster & 0xFFFF0000) >> 16,
+        writtenDate: new Uint8Array(4).fill(0),
+        firstClusterAddressLow: rootCluster & 0xFFFF,
+        fileSize,
+
+        _filenameStr: name83,
         _lfns: 0,
     };
 }

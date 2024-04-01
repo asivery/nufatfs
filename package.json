@@ -17,6 +17,9 @@
     "fatfs",
     "mass-storage"
   ],
+  "files": [
+    "dist"
+  ],
   "author": "asivery",
   "license": "GPL-2.0",
   "bugs": {

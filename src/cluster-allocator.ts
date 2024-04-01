@@ -95,7 +95,7 @@ export class ClusterAllocator {
     }
 
     public allocate(lastLink: ClusterChainLink | null, size: number): ClusterChainLink[] {
-        console.log(`[NUFATFS]: Trying to allocate ${size} bytes after ${lastLink?.index || '<unspecified>'}`);
+        // console.log(`[NUFATFS]: Trying to allocate ${size} bytes after ${lastLink?.index || '<unspecified>'}`);
         if(!this.freelist) return [];
         // Try to find an area that's big enough to house the whole `size`
         const sizeAsClusters = Math.ceil(size / this.fat.clusterSizeInBytes);
@@ -131,7 +131,7 @@ export class ClusterAllocator {
             this.freemap[i] = false;
             remainingSize -= link.length;
         }
-        console.log(`[NUFATFS]: Allocated chain: ${links.map(e => e.index).join(', ')}`);
+        // console.log(`[NUFATFS]: Allocated chain: ${links.map(e => e.index).join(', ')}`);
         for(let i = 1; i<links.length; i++){
             // Update the main FAT
             this.fat.writeFATClusterEntry!(links[i - 1].index, links[i].index);

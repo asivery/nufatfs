@@ -155,7 +155,7 @@ export class LowLevelFatFilesystem {
                 arraysEq(this.fsInfo.signature2, textEncoder.encode("rrAa")) &&
                 arraysEq(this.fsInfo.signature3, new Uint8Array([0x00, 0x00, 0x55, 0xaa]))
             )){
-                console.log(`[NUFATFS]: Found invalid values in fat32 signatures. Ignoring values.`)
+                console.log(`[NUFATFS]: Warning: Found invalid values in fat32 signatures. Ignoring values.`)
                 this.fsInfo.lastKnownFreeDataClusters = 0xFFFFFFFF
                 this.fsInfo.lastKnownAllocatedDataCluster = 0xFFFFFFFF
             }
@@ -163,7 +163,7 @@ export class LowLevelFatFilesystem {
 
         this.maxCluster = Math.floor((this.bootsectorInfo.totalLogicalSectors - this.dataSectorOffset) / this.bootsectorInfo.logicalSectorsPerCluster);
         if(this.maxCluster > 0x0FFF_FFF7){
-            console.log("[NUFATFS]: Warning: FAT Device is too big. Some data will be inaccessible");
+            console.log("[NUFATFS]: Warning: FAT Device is too big. Some data will be inaccessible.");
             this.maxCluster = 0x0FFF_FFF7;
         }
         if(this.isFat16){
@@ -187,7 +187,6 @@ export class LowLevelFatFilesystem {
         // Else, read the directory table from 32extension
         if(this.isFat16){
             let rootSectorLength = (this.bootsectorInfo!.deprecatedMaxRootDirEntries * 32) / this.driver.sectorSize;
-            console.log(`There are ${rootSectorLength} sectors of the root directory`);
             return this.consumeAllDirectoryEntries(await this.driver.readSectors(this.dataSectorOffset, rootSectorLength));
         }else{
             return await this.readAndConsumeAllDirectoryEntries(this.fat32Extension!.rootDirCluster)
@@ -221,7 +220,7 @@ export class LowLevelFatFilesystem {
             output.push(entry);
         }
         if(lfnCounter){
-            console.log(`[NUFATFS]: Warning! Encountered unused LFNs while traversing directory trees`);
+            console.log(`[NUFATFS]: Warning! Encountered unused LFNs while traversing directory trees.`);
         }
         return output;
     }

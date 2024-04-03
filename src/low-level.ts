@@ -116,7 +116,7 @@ export class LowLevelFatFilesystem {
     private constructor(public driver: Driver){
         this.isWritable = !!driver.writeSectors;
     };
-    private async load(){
+    private async load(bypassCoherencyCheck: boolean = false){
         const firstSector = await this.driver.readSectors(0, 1);
         this.bootsectorInfo = createBootSectorInfo(firstSector);
         this.isFat16 = this.bootsectorInfo.deprecatedLogicalSectorsPerFat !== 0;
@@ -171,10 +171,12 @@ export class LowLevelFatFilesystem {
         }
         let rawFat = await this.driver.readSectors(this.bootsectorInfo.reservedLogicalSectors, this.logicalSectorsPerFat);
         this.fatContents = new DataView(rawFat.buffer);
-        for(let alternativeFat = 1; alternativeFat < this.bootsectorInfo.fatCount; alternativeFat++){
-            let altFatContents = await this.driver.readSectors(this.bootsectorInfo.reservedLogicalSectors + this.logicalSectorsPerFat*alternativeFat, this.logicalSectorsPerFat);
-            if(!arraysEq(altFatContents, rawFat)){
-                throw new FatError("Fat backup invalid - filesystem damaged. Run CHKDSK or fsck!");
+        if(!bypassCoherencyCheck) {
+            for(let alternativeFat = 1; alternativeFat < this.bootsectorInfo.fatCount; alternativeFat++){
+                let altFatContents = await this.driver.readSectors(this.bootsectorInfo.reservedLogicalSectors + this.logicalSectorsPerFat*alternativeFat, this.logicalSectorsPerFat);
+                if(!arraysEq(altFatContents, rawFat)){
+                    throw new FatError("Fat backup invalid - filesystem damaged. Run CHKDSK or fsck!");
+                }
             }
         }
         
@@ -377,9 +379,9 @@ export class LowLevelFatFilesystem {
         return entries ? entries[entries.length - 1] : null;
     }
 
-    public static async _create(driver: Driver){
+    public static async _create(driver: Driver, bypassCoherencyCheck: boolean = false){
         const fs = new LowLevelFatFilesystem(driver);
-        await fs.load();
+        await fs.load(bypassCoherencyCheck);
         return fs;
     }
 }

@@ -8,8 +8,8 @@ import { newFatFSDirectoryEntry } from "./constructors";
 // This class aims to contain the demons stored in LowLevelFatFilesystem.
 export class FatFilesystem {
     private constructor(private fat: LowLevelFatFilesystem){}
-    public static async create(driver: Driver){
-        const fat = await LowLevelFatFilesystem._create(driver);
+    public static async create(driver: Driver, bypassCoherencyCheck: boolean = false){
+        const fat = await LowLevelFatFilesystem._create(driver, bypassCoherencyCheck);
         return new FatFilesystem(fat);
     }
 

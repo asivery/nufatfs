@@ -98,9 +98,9 @@ export class FatFilesystem {
 
     public async rename(path: string, newPath: string) {
         let lastSlash = newPath.lastIndexOf("/");
-        const newParentPath = newPath.slice(0, lastSlash);
+        const newParentPath = newPath.includes("/") ? newPath.slice(0, lastSlash) : null;
         const newName = newPath.slice(lastSlash + 1);
-        const newParent = await this.fat.traverse(newParentPath) as CachedDirectory;
+        const newParent = newParentPath ? (await this.fat.traverse(newParentPath) as CachedDirectory) : this.fat.root!;
 
         const entry = await this.fat.traverse(path);
         lastSlash = newPath.lastIndexOf("/");

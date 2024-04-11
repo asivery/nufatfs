@@ -120,7 +120,7 @@ export class LowLevelFatFilesystem {
         const firstSector = await this.driver.readSectors(0, 1);
         this.bootsectorInfo = createBootSectorInfo(firstSector);
         this.isFat16 = this.bootsectorInfo.deprecatedLogicalSectorsPerFat !== 0;
-        this.endOfChain = this.isFat16 ? 0xFFFF : 0xFFFFFFFF;
+        this.endOfChain = this.isFat16 ? 0xFFFF : 0x0FFF_FFFF;
         this.readFATClusterEntry = this.isFat16 ? 
             (number: number) => this.fatContents!.getUint16(number * 2, true) :
             (number: number) => this.fatContents!.getUint32(number * 4, true);
@@ -258,7 +258,7 @@ export class LowLevelFatFilesystem {
     }
 
     public async readAndConsumeAllDirectoryEntries(initialCluster: number) {
-        return this.consumeAllDirectoryEntries(await this.constructClusterChain(initialCluster).readAll());
+        return this.consumeAllDirectoryEntries(await this.constructClusterChain(initialCluster, false).readAll());
     }
 
     public async readClusters(clusterNumber: number, count: number){

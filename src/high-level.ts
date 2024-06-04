@@ -135,6 +135,7 @@ export class FatFilesystem {
         const parentPath = path.includes("/") ? path.slice(0, lastSlash) : null;
         const name = nameNormalTo83(path.slice(lastSlash + 1));
         const parent = parentPath ? (await this.fat.traverse(parentPath) as CachedDirectory) : this.fat.root!;
+        if(await parent.findEntry(name)) return;
 
         const rootCluster = this.fat.allocator!.allocate(null, 1)[0];
         if(this.fat.isFat16 && rootCluster.index > 0xFFFF) {

@@ -184,7 +184,7 @@ export class LowLevelFatFilesystem {
             }
         }
         
-        this.root = CachedDirectory.readyMade(this, await this.getRootDirectoryData(), -1, null);
+        this.root = CachedDirectory.readyMade(this, await this.getRootDirectoryData(), this.isFat16 ? -1 : this.fat32Extension!.rootDirCluster, null);
         this.allocator = await ClusterAllocator.create(this);
     }
 

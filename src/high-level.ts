@@ -130,6 +130,33 @@ export class FatFilesystem {
         this.fat.markAsAltered(newParent);
     }
 
+    public async mkdir(path: string) {
+        let lastSlash = path.lastIndexOf("/");
+        const parentPath = path.includes("/") ? path.slice(0, lastSlash) : null;
+        const name = nameNormalTo83(path.slice(lastSlash + 1));
+        const parent = parentPath ? (await this.fat.traverse(parentPath) as CachedDirectory) : this.fat.root!;
+
+        const rootCluster = this.fat.allocator!.allocate(null, 1)[0];
+        if(this.fat.isFat16 && rootCluster.index > 0xFFFF) {
+            throw new Error("Cannot allocate next cluster!");
+        }
+        // Create the directory entry
+        const dirEntry = newFatFSDirectoryEntry(name, FatFSDirectoryEntryAttributes.Directory, rootCluster.index, 0);
+        // Create the underlying low-level structures.
+        const ownDirEntry = newFatFSDirectoryEntry(".          ", FatFSDirectoryEntryAttributes.Directory, rootCluster.index, 0);
+        const ownParentEntry = newFatFSDirectoryEntry("..         ", FatFSDirectoryEntryAttributes.Directory, parent.initialCluster === -1 ? 0 : parent.initialCluster, 0);
+        // 'format' the cluster
+        await rootCluster.write(new Uint8Array(rootCluster.length).fill(0));
+        // Create the cached entry
+        const cachedEntry = CachedDirectory.readyMade(this.fat!, [ownDirEntry, ownParentEntry], rootCluster.index, dirEntry);
+
+        // Cache
+        await parent.getEntries();
+        parent.rawDirectoryEntries!.push(cachedEntry);
+        this.fat.markAsAltered(parent);
+        this.fat.markAsAltered(cachedEntry);
+    }
+
     public async flushMetadataChanges(){
         return this.fat.flush();
     }

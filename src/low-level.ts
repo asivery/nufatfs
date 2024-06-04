@@ -74,6 +74,10 @@ export class CachedDirectory {
         entry.rawDirectoryEntries = entries.map((e: FatFSDirectoryEntry) => {
             if(e.attribs & FatFSDirectoryEntryAttributes.Directory){
                 let entryInitialCluster = e.firstClusterAddressLow | (e.firstClusterAddressHigh << 16);
+                if(entryInitialCluster === 0) {
+                    // Root.
+                    return CachedDirectory.readyMade(fat, fat.root!.rawDirectoryEntries!.map(e => (e instanceof CachedDirectory) ? e.underlying! : e), 0, e);
+                }
                 return new CachedDirectory(fat, entryInitialCluster, e);
             }
             return e;

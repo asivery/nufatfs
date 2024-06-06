@@ -65,12 +65,13 @@ export class Chain<T extends ChainLink> {
 
         while(currentLength < count){
             if(!this.currentLink || this.linkSubCursor === undefined) {
-                return ret.slice(0, currentLength);
+                break;
             }
             const thisLinkContents = await this.currentLink.read();
-            const limited = thisLinkContents.slice(this.linkSubCursor, Math.min(count - currentLength + this.linkSubCursor, this.currentLink.length));
+            const limited = thisLinkContents.slice(this.linkSubCursor, count - currentLength + this.linkSubCursor);
             ret.set(limited, currentLength);
             currentLength += limited.length;
+            this._cursor += limited.length;
             this.linkSubCursor += limited.length;
 
             if(this.linkSubCursor >= this.currentLink.length){
@@ -78,7 +79,6 @@ export class Chain<T extends ChainLink> {
                 this.linkIndex++;
                 this.linkSubCursor -= this.currentLink.length;
                 this.currentLink = this._links[this.linkIndex];
-                this._cursor += limited.length;
             }
         }
         return ret.slice(0, currentLength);

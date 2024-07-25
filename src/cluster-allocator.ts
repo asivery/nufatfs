@@ -1,7 +1,6 @@
 import { Chain } from "./chained-structures";
 import { ClusterChainLink } from "./cluster-chain";
-import { FAT_MARKER_DELETED, FORBIDDEN_ATTRIBUTES_FOR_FILE, LowLevelFatFilesystem } from "./low-level";
-import { FatFSDirectoryEntry, FatFSDirectoryEntryAttributes } from "./types";
+import { LowLevelFatFilesystem } from "./low-level";
 
 export interface FreeClusterChain {
     startCluster: number,
@@ -21,7 +20,7 @@ export class ClusterAllocator {
     }
     
     private async init(){
-        const fatEntriesCount = (this.fat.logicalSectorsPerFat * this.fat.driver.sectorSize) / (this.fat.isFat16 ? 2 : 4);
+        const fatEntriesCount = this.fat.maxDataCluster + 1;
         this.freemap = Array<boolean>(fatEntriesCount).fill(true);
         // Clusters 0 and 1 are always taken.
         this.freemap[0] = false;
@@ -65,7 +64,7 @@ export class ClusterAllocator {
 
         // await consumeDirectory(-1, true)
 
-        for(let i = 2; i < (this.fat.fatContents!.byteLength / (this.fat.isFat16 ? 2 : 4)); i++) {
+        for(let i = 2; i <= this.fat.maxDataCluster; i++) {
             this.freemap[i] = this.fat.readFATClusterEntry!(i) == 0;
         }
 
@@ -96,9 +95,9 @@ export class ClusterAllocator {
 
     public allocate(lastLink: ClusterChainLink | null, size: number): ClusterChainLink[] {
         // console.log(`[NUFATFS]: Trying to allocate ${size} bytes after ${lastLink?.index || '<unspecified>'}`);
-        if(!this.freelist) return [];
+        if(!this.freelist.length || size === 0) return [];
         // Try to find an area that's big enough to house the whole `size`
-        const sizeAsClusters = Math.ceil(size / this.fat.clusterSizeInBytes);
+        let sizeAsClusters = Math.ceil(size / this.fat.clusterSizeInBytes);
         const allFitting = this.freelist.filter(e => e.length >= sizeAsClusters);
         const findClosest = (list: FreeClusterChain[]) => {
             if(lastLink) {
@@ -108,7 +107,7 @@ export class ClusterAllocator {
         findClosest(allFitting);
         let chainToModify: FreeClusterChain;
 
-        if(allFitting) {
+        if(allFitting.length) {
             // There exists such a chain
             chainToModify = allFitting[0];
         } else {
@@ -116,6 +115,10 @@ export class ClusterAllocator {
             findClosest(clone);
             chainToModify = clone[0];
         }
+
+        if(!chainToModify) return [];
+        
+        sizeAsClusters = Math.min(sizeAsClusters, chainToModify.length);
         chainToModify.length -= sizeAsClusters;
         const startIndex = chainToModify.startCluster;
         chainToModify.startCluster += sizeAsClusters;

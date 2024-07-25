@@ -58,11 +58,7 @@ export function structFormatUnpack(format: string, data: Uint8Array, offset = 0)
                 // Apply two's compliment if needed.
                 if(char.toLowerCase() !== char){
                     // Is upper-case, so unsigned
-                    let signBitMask = (1 << (byteCount * 8 - 1));
-                    if(resultingInteger & signBitMask){
-                        // It's a negative number.
-                        resultingInteger = (resultingInteger & (signBitMask - 1)) - signBitMask;
-                    }
+                    resultingInteger >>>= 0;
                 }
                 output.push(resultingInteger);
             }

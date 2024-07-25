@@ -1,4 +1,4 @@
-import { CachedDirectory, FatError, FAT_MARKER_DELETED, LowLevelFatFilesystem } from "./low-level";
+import { CachedDirectory, FatError, FAT_MARKER_DELETED, LowLevelFatFilesystem, CachedFatDirectoryEntry } from "./low-level";
 import { Chain } from "./chained-structures";
 import { Driver, FatFSDirectoryEntry, FatFSDirectoryEntryAttributes } from "./types";
 import { nameNormalTo83 } from "./utils";
@@ -26,20 +26,28 @@ export class FatFilesystem {
     }
 
     public async create(path: string): Promise<FatFSFileHandle | null>{
+        // Make sure the file we're about to create doesn't already exist.
         const existingEntry = await this.fat.traverse(path);
         if(existingEntry) {
             return null;
         }
+
         let lastSlash = path.lastIndexOf("/");
-        const parentPath = path.slice(0, lastSlash);
+        let parent: CachedFatDirectoryEntry | null;
+        if(lastSlash === -1) {
+            parent = this.fat.root!;
+        } else {
+            const parentPath = path.slice(0, lastSlash);
+            parent = await this.fat.traverse(parentPath);
+            if(!parent || !(parent instanceof CachedDirectory)) {
+                return null;
+            }
+        }
+
         const name = path.slice(lastSlash + 1);
         const encName = nameNormalTo83(name);
-        const parent = await this.fat.traverse(parentPath);
-        if(!parent || !(parent instanceof CachedDirectory)) {
-            return null;
-        }
         const entry: FatFSDirectoryEntry = newFatFSDirectoryEntry(encName, FatFSDirectoryEntryAttributes.None, 0, 0);
-        await parent.getEntries(); // Cache
+        await parent.getEntries(); // Load entry from driver
         parent.rawDirectoryEntries!.push(entry);
         this.fat.markAsAltered(parent);
         return new FatFSFileHandle(this.fat, this.fat.constructClusterChain(0, true), true, entry, parent);
@@ -138,7 +146,7 @@ export class FatFilesystem {
         if(await parent.findEntry(name)) return;
 
         const rootCluster = this.fat.allocator!.allocate(null, 1)[0];
-        if(this.fat.isFat16 && rootCluster.index > 0xFFFF) {
+        if(!rootCluster || (this.fat.isFat16 && rootCluster.index > 0xFFFF)) {
             throw new Error("Cannot allocate next cluster!");
         }
         // Create the directory entry

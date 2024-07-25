@@ -92,6 +92,7 @@ export class LowLevelFatFilesystem {
     fat32Extension?: Fat32Extension;
     fsInfo?: FatFSInformation;
     maxCluster: number = 0;
+    maxDataCluster: number = 0;
     isFat16: boolean = false;
     fat16ClusterAreaOffset = 0;
     root?: CachedDirectory;
@@ -165,11 +166,15 @@ export class LowLevelFatFilesystem {
             }
         }
 
-        this.maxCluster = Math.floor((this.bootsectorInfo.totalLogicalSectors - this.dataSectorOffset) / this.bootsectorInfo.logicalSectorsPerCluster);
+        const totalLogicalSectors = this.bootsectorInfo.deprecatedTotalLogicalSectors || this.bootsectorInfo.totalLogicalSectors;
+        this.maxCluster = Math.floor((totalLogicalSectors - this.dataSectorOffset) / this.bootsectorInfo.logicalSectorsPerCluster);
         if(this.maxCluster > 0x0FFF_FFF7){
             console.log("[NUFATFS]: Warning: FAT Device is too big. Some data will be inaccessible.");
             this.maxCluster = 0x0FFF_FFF7;
         }
+
+        // Carve out space for reserved data. (see clusterToSector for explanation)
+        this.maxDataCluster = this.maxCluster - Math.ceil((this.dataSectorOffset + this.fat16ClusterAreaOffset) / this.bootsectorInfo.logicalSectorsPerCluster) - 2;
         if(this.isFat16){
             this.fat16ClusterAreaOffset = (this.bootsectorInfo.deprecatedMaxRootDirEntries * 32) / this.bootsectorInfo.bytesPerLogicalSector;
         }

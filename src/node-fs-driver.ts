@@ -18,6 +18,7 @@ export function createImageFileDriver(imageFile: string, sectorSize: number, wri
             })
         },
         writeSectors: writable ? async (startIndex: number, data: Uint8Array) => {
+            if(startIndex * sectorSize + data.length > stat.size) return Promise.reject(new Error("Writing out of bounds of image!"));
             return new Promise((res, rej) => fs.write(handle, data, 0, data.length, startIndex * sectorSize, (err, written) => {
                 if(err) rej(err);
                 else res();

@@ -125,13 +125,13 @@ export class Chain<T extends ChainLink> {
         if(!this.writable) throw new ChainError("Cannot write to a read-only chain!");
         let wholeChainLength = this.length();
         // Allocate all the required space first.
-        if((this.cursor + data.length) > wholeChainLength){
+        while((this.cursor + data.length) > wholeChainLength){
             if(!this.allocateLink){
                 throw new ChainError("No space!");
             }
             
             let newLinks = await this.allocateLink(this._links[this._links.length - 1] ?? null, (this.cursor + data.length) - wholeChainLength);
-            if(!newLinks) throw new ChainError("Allocator can't allocate more links!");
+            if(!newLinks.length) throw new ChainError("Allocator can't allocate more links!");
 
             wholeChainLength += newLinks.reduce((a, b) => a + b.length, 0);
             this._links.push.apply(this._links, newLinks);

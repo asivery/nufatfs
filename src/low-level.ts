@@ -97,7 +97,7 @@ export class LowLevelFatFilesystem {
     fat16ClusterAreaOffset = 0;
     root?: CachedDirectory;
     isWritable: boolean;
-    endOfChain: number = 0;
+    endOfChain: number[] = [];
     private fatAltered = false;
     writeFATClusterEntry?: (number: number, next: number) => void;
     readFATClusterEntry?: (number: number) => number;
@@ -125,7 +125,7 @@ export class LowLevelFatFilesystem {
         const firstSector = await this.driver.readSectors(0, 1);
         this.bootsectorInfo = createBootSectorInfo(firstSector);
         this.isFat16 = this.bootsectorInfo.deprecatedLogicalSectorsPerFat !== 0;
-        this.endOfChain = this.isFat16 ? 0xFFFF : 0x0FFF_FFFF;
+        this.endOfChain = this.isFat16 ? Array(8).fill(0).map((e, i) => 0xFFF8 + i) : Array(8).fill(0).map((e, i) => 0x0FFFFFF8 + i);
         this.readFATClusterEntry = this.isFat16 ? 
             (number: number) => this.fatContents!.getUint16(number * 2, true) :
             (number: number) => this.fatContents!.getUint32(number * 4, true);
@@ -241,8 +241,9 @@ export class LowLevelFatFilesystem {
         const links = [link];
         // console.log("Constructing chain for " + initialCluster);
         // 0x00 can be EoC as well.
-        while(!([this.endOfChain, 0x00].includes(link = this.readFATClusterEntry!(link)))) {
+        while(!([...this.endOfChain, 0x00].includes(link = this.readFATClusterEntry!(link)))) {
             // console.log("... " + link);
+            if(links.includes(link)) throw new Error("Infinite allocation loop!");
             links.push(link);
         }
         // console.log("Chain complete. There are " + links.length + " links");
@@ -255,7 +256,7 @@ export class LowLevelFatFilesystem {
         }
         const defaultLength = this.bootsectorInfo!.logicalSectorsPerCluster * this.driver.sectorSize;
         const links = [];
-        
+
         // InitialCluster === 0 denotes file created, but space unallocated. It is zero bytes long.
         if(initialCluster !== 0) {
             const clusterChain = this.getClusterChainFromFAT(initialCluster);
@@ -316,7 +317,7 @@ export class LowLevelFatFilesystem {
             previous = link;
         }
         // Write End-of-Chain
-        this.writeFATClusterEntry!(previous, this.endOfChain);
+        this.writeFATClusterEntry!(previous, this.endOfChain[this.endOfChain.length - 1]);
     }
 
     public async flush() {
@@ -335,6 +336,7 @@ export class LowLevelFatFilesystem {
         }
 
         // Rebuild all the altered directory entries.
+        const toFree: number[] = [];
         for(let entry of this.alteredDirectoryEntries){
             let writingChain;
             if(entry.initialCluster === -1) {
@@ -355,13 +357,29 @@ export class LowLevelFatFilesystem {
             }else{
                 writingChain = this.constructClusterChain(entry.initialCluster);
             }
-            
+
+            let remaining = writingChain.length();
             for(let subentry of await entry.getEntries()){
-                let raw = subentry instanceof CachedDirectory ? subentry.underlying! : subentry;
-                await writingChain.write(serializeFatFSDirectoryEntry(raw));
+                const raw = subentry instanceof CachedDirectory ? subentry.underlying! : subentry;
+                const data = serializeFatFSDirectoryEntry(raw);
+                remaining -= data.length;
+                await writingChain.write(data);
+            }
+            if(remaining > 0) {
+                while(remaining > writingChain.links[writingChain.links.length - 1].length && entry.initialCluster === -1) {
+                    // Remove the last chain.
+                    const lastLink = writingChain.links.splice(writingChain.links.length - 1, 1)[0] as ClusterChainLink;
+                    toFree.push(lastLink.index);
+                    this.writeFATClusterEntry!(lastLink.index, this.endOfChain[this.endOfChain.length - 1]);
+                    if(writingChain.links.length) this.writeFATClusterEntry!((writingChain.links[writingChain.links.length - 1] as ClusterChainLink).index, this.endOfChain[this.endOfChain.length - 1]);
+                    remaining -= lastLink.length;
+                }
+                // Zero out the rest.
+                await writingChain.write(new Uint8Array(remaining).fill(0));
             }
             await writingChain.flushChanges();
         }
+        this.allocator?.addClusterListToFreelist(toFree);
         this.alteredDirectoryEntries = [];
     }
 

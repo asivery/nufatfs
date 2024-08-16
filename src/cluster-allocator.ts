@@ -117,7 +117,7 @@ export class ClusterAllocator {
         }
 
         if(!chainToModify) return [];
-        
+
         sizeAsClusters = Math.min(sizeAsClusters, chainToModify.length);
         chainToModify.length -= sizeAsClusters;
         const startIndex = chainToModify.startCluster;
@@ -139,7 +139,7 @@ export class ClusterAllocator {
             // Update the main FAT
             this.fat.writeFATClusterEntry!(links[i - 1].index, links[i].index);
         }
-        this.fat.writeFATClusterEntry!(links[links.length - 1].index, this.fat.endOfChain);
+        this.fat.writeFATClusterEntry!(links[links.length - 1].index, this.fat.endOfChain[this.fat.endOfChain.length - 1]);
         if(lastLink){
             // Merge chains if possible.
             this.fat.writeFATClusterEntry!(lastLink.index, links[0].index);

@@ -91,7 +91,7 @@ export class Chain<T extends ChainLink> {
     public async flushChanges(){
         return this.flushWritingBuffer();
     }
-    
+
     private writingBuffer: Uint8Array | null = null;
     private isNewByteArray: boolean[] | null = null;
     private async flushWritingBuffer(){

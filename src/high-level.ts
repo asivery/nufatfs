@@ -81,7 +81,7 @@ export class FatFilesystem {
         if(!tree) return null;
         const [parent, entry] = tree.slice(-2);
         if(entry instanceof CachedDirectory){
-            if((await entry.getEntries()).length > 0) {
+            if((await entry.getEntries()).length > 2) { // 2 entries - '.' and '..'
                 throw new FatError("Cannot delete a non-empty directory.");
             } 
         }
@@ -92,8 +92,11 @@ export class FatFilesystem {
 
         // Mark as deleted
         rawEntry.filename[0] = FAT_MARKER_DELETED;
+        rawEntry._filenameStr = '';
         // Ask the main driver to update this entry's parent
         this.fat.markAsAltered(parent);
+        // Remove the file from parent's cache
+        parent.rawDirectoryEntries!.splice(parent.rawDirectoryEntries!.indexOf(entry), 1);
         // Construct a chain, then free it
         const cluster = rawEntry.firstClusterAddressLow | (rawEntry.firstClusterAddressHigh << 16);
         const chain = this.fat.getClusterChainFromFAT(cluster);

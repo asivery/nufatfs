@@ -99,7 +99,7 @@ export function newFatFSDirectoryEntry(name83: string, attribs: FatFSDirectoryEn
 export function serializeFatFSDirectoryEntry(input: FatFSDirectoryEntry): Uint8Array {
     const data = new Uint8Array(32);
     const dataView = new DataView(data.buffer);
-    data.set(textEncoder.encode(input._filenameStr), 0);
+    data.set(input._filenameStr === '' ? input.filename : textEncoder.encode(input._filenameStr), 0);
     data[11] = input.attribs;
     data[12] = input.reserved;
     data.set(input.creationDate, 13);

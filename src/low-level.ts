@@ -98,11 +98,12 @@ export class LowLevelFatFilesystem {
     root?: CachedDirectory;
     isWritable: boolean;
     endOfChain: number[] = [];
+    alteredFATSectors: Set<number> = new Set();
     private fatAltered = false;
     writeFATClusterEntry?: (number: number, next: number) => void;
     readFATClusterEntry?: (number: number) => number;
 
-    fatContents?: DataView;
+    private fatContents?: DataView;
 
     private alteredDirectoryEntries: CachedDirectory[] = [];
     public allocator?: ClusterAllocator;
@@ -129,9 +130,18 @@ export class LowLevelFatFilesystem {
         this.readFATClusterEntry = this.isFat16 ? 
             (number: number) => this.fatContents!.getUint16(number * 2, true) :
             (number: number) => this.fatContents!.getUint32(number * 4, true);
-        this.writeFATClusterEntry = this.isFat16 ?
-            (number: number, next: number) => {this.fatContents!.setUint16(number * 2, next, true); this.fatAltered = true; }:
-            (number: number, next: number) => {this.fatContents!.setUint32(number * 4, next, true); this.fatAltered = true; };
+        this.writeFATClusterEntry = (number: number, next: number) => {
+            let sector;
+            if(this.isFat16) {
+                sector = Math.floor((number * 2) / this.bootsectorInfo!.bytesPerLogicalSector);
+                this.fatContents!.setUint16(number * 2, next, true);
+            } else {
+                sector = Math.floor((number * 4) / this.bootsectorInfo!.bytesPerLogicalSector);
+                this.fatContents!.setUint32(number * 4, next, true);
+            }
+            this.alteredFATSectors.add(sector);
+            this.fatAltered = true;
+        }
         let offset = 0x24;
         if(!this.isFat16){
             this.fat32Extension = createFat32ExtendedInfo(firstSector, offset);
@@ -329,9 +339,16 @@ export class LowLevelFatFilesystem {
         // Reserialize the FAT tables, and write all the copies.
         if(this.fatAltered){
             const fatContents = new Uint8Array(this.fatContents!.buffer);
-            for(let i = 0; i<this.bootsectorInfo!.fatCount; i++) {
-                await this.driver.writeSectors!(this.bootsectorInfo!.reservedLogicalSectors + i * this.logicalSectorsPerFat, fatContents);
+            for(let fat = 0; fat < this.bootsectorInfo!.fatCount; fat++) {
+                for(const usedFATSector of this.alteredFATSectors) {
+                    const sectorSlice = fatContents.subarray(
+                        usedFATSector * this.bootsectorInfo!.bytesPerLogicalSector,
+                        (usedFATSector + 1) * this.bootsectorInfo!.bytesPerLogicalSector,
+                    );
+                    await this.driver.writeSectors!(this.bootsectorInfo!.reservedLogicalSectors + fat * this.logicalSectorsPerFat + usedFATSector, sectorSlice);
+                }
             }
+            this.alteredFATSectors = new Set();
             this.fatAltered = false;
         }
 

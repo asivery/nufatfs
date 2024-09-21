@@ -1,6 +1,6 @@
 {
   "name": "nufatfs",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "A new async-friendly library for accessing FAT16 and FAT32 filesystems",
   "main": "dist/index.js",
   "scripts": {

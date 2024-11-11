@@ -108,6 +108,10 @@ export class FatFilesystem {
     }
 
     public async rename(path: string, newPath: string) {
+        const existingNewTree = await this.fat.traverseEntries(newPath);
+        if(existingNewTree) {
+            throw new FatError("File already exists!");
+        }
         let lastSlash = newPath.lastIndexOf("/");
         const newParentPath = newPath.includes("/") ? newPath.slice(0, lastSlash) : null;
         const newName = newPath.slice(lastSlash + 1);

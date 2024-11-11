@@ -3,7 +3,7 @@ import { ClusterAllocator } from "./cluster-allocator";
 import { ClusterChainLink } from "./cluster-chain";
 import { createBootSectorInfo, createFat32ExtendedInfo, createFatBootInfo, createFatFSDirectoryEntry, createFatFsInformation, serializeFatFSDirectoryEntry } from "./constructors";
 import { BaseBootSectorInfo, Driver, Fat32Extension, FatBootInfo, FatFSDirectoryEntry, FatFSDirectoryEntryAttributes, FatFSInformation } from "./types";
-import { arraysEq, name83toNormal, namesEqual, structFormatUnpack } from "./utils";
+import { arraysEq, name83toNormal, nameNormalTo83, namesEqual, structFormatUnpack } from "./utils";
 
 export class FatError extends Error {}
 
@@ -407,7 +407,7 @@ export class LowLevelFatFilesystem {
         let currentRoot: CachedFatDirectoryEntry = this.root!;
         let roots: CachedFatDirectoryEntry[] = [currentRoot];
         for(let i = 0; i<pathEntries.length; i++){
-            const next: CachedFatDirectoryEntry | null = await (currentRoot as CachedDirectory).findEntry(pathEntries[i]);
+            const next: CachedFatDirectoryEntry | null = await (currentRoot as CachedDirectory).findEntry(name83toNormal(nameNormalTo83(pathEntries[i])));
             if(!next) return null;
             if(i !== pathEntries.length - 1 && !(next instanceof CachedDirectory)){
                 return null;

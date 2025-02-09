@@ -50,8 +50,9 @@ export class Chain<T extends ChainLink> {
         return this._links.reduce((a, b) => a + b.length, 0);
     }
 
-    seek(to: number, whence?: 'start' | 'cur' | 'end'): void {
+    async seek(to: number, whence?: 'start' | 'cur' | 'end'): Promise<void> {
         // Regardless of the writing state, flush the buffer on-seek
+        await this.flushChanges();
         if(whence === 'start' || !whence) this.cursor = to;
         else if(whence === 'cur') this.cursor += to;
         else if(whence === 'end') this.cursor = this.length() - to;

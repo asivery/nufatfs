@@ -189,8 +189,8 @@ export class FatFSFileHandle {
 
     constructor(private fat: LowLevelFatFilesystem, private chain: Chain<ClusterChainLink>, private writable: boolean, private underlying: FatFSDirectoryEntry, private parent: CachedDirectory){}
 
-    seek(to: number){
-        this.chain.seek(to);
+    async seek(to: number){
+        await this.chain.seek(to);
     }
 
     async read(bytes: number) {

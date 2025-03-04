@@ -205,7 +205,7 @@ export class FatFSFileHandle {
         if(!this.writable) return;
         await this.chain.flushChanges();
         this.underlying.fileSize = this.chain.getTotalLength();
-        if(this.underlying._firstCluster && this.underlying.fileSize) {
+        if(this.underlying._firstCluster === 0 && this.underlying.fileSize) {
             // This was an empty file before, but is not anymore
             const rootCluster = this.chain.links[0].index!;
             this.underlying._firstCluster = rootCluster;

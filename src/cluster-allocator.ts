@@ -43,7 +43,7 @@ export class ClusterAllocator {
             
 
         //     for(let subentry of thisEntry) {
-        //         const initialCluster = subentry.firstClusterAddressLow | (subentry.firstClusterAddressHigh << 16);
+        //         const initialCluster = subentry._firstCluster;
         //         if(initialCluster === 0) {
         //             // Empty file
         //             continue;

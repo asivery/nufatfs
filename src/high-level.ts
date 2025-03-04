@@ -21,7 +21,7 @@ export class FatFilesystem {
         if(!tree) return null;
         const [parent, entry] = tree.slice(-2);
         if(!parent || !entry || entry instanceof CachedDirectory) return null;
-        const chain = this.fat.constructClusterChain(entry.firstClusterAddressLow | entry.firstClusterAddressHigh << 16, true, entry.fileSize);
+        const chain = this.fat.constructClusterChain(entry._firstCluster, true, entry.fileSize);
         return new FatFSFileHandle(this.fat, chain, writable, entry, parent as CachedDirectory);
     }
 
@@ -98,7 +98,7 @@ export class FatFilesystem {
         // Remove the file from parent's cache
         parent.rawDirectoryEntries!.splice(parent.rawDirectoryEntries!.indexOf(entry), 1);
         // Construct a chain, then free it
-        const cluster = rawEntry.firstClusterAddressLow | (rawEntry.firstClusterAddressHigh << 16);
+        const cluster = rawEntry._firstCluster;
         const chain = this.fat.getClusterChainFromFAT(cluster);
         this.fat.allocator!.addClusterListToFreelist(chain);
         // Zero out the chain in FAT
@@ -205,11 +205,10 @@ export class FatFSFileHandle {
         if(!this.writable) return;
         await this.chain.flushChanges();
         this.underlying.fileSize = this.chain.getTotalLength();
-        if(this.underlying.firstClusterAddressHigh === 0 && this.underlying.firstClusterAddressLow === 0 && this.underlying.fileSize) {
+        if(this.underlying._firstCluster && this.underlying.fileSize) {
             // This was an empty file before, but is not anymore
             const rootCluster = this.chain.links[0].index!;
-            this.underlying.firstClusterAddressLow = rootCluster & 0xFFFF;
-            this.underlying.firstClusterAddressHigh = (rootCluster & 0xFFFF0000) >> 16;
+            this.underlying._firstCluster = rootCluster;
         }
         this.fat.markAsAltered(this.parent);
     }

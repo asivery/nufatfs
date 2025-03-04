@@ -30,11 +30,11 @@ export class CachedDirectory {
     public async getEntries(): Promise<CachedFatDirectoryEntry[]>{
         if(!this.rawDirectoryEntries){
             // Load it all first
-            const initialCluster = this.underlying!.firstClusterAddressLow | (this.underlying!.firstClusterAddressHigh << 16);
+            const initialCluster = this.underlying!._firstCluster;
             const rawEntries = await this.fat.readAndConsumeAllDirectoryEntries(initialCluster);
             this.rawDirectoryEntries = rawEntries.map((e: FatFSDirectoryEntry) => {
                 if(e.attribs & FatFSDirectoryEntryAttributes.Directory){
-                    let entryInitialCluster = e.firstClusterAddressLow | (e.firstClusterAddressHigh << 16);
+                    let entryInitialCluster = e._firstCluster;
                     return new CachedDirectory(this.fat, entryInitialCluster, e);
                 }
                 return e;
@@ -73,7 +73,7 @@ export class CachedDirectory {
         const entry = new CachedDirectory(fat, initialCluster, underlying ?? null);
         entry.rawDirectoryEntries = entries.map((e: FatFSDirectoryEntry) => {
             if(e.attribs & FatFSDirectoryEntryAttributes.Directory){
-                let entryInitialCluster = e.firstClusterAddressLow | (e.firstClusterAddressHigh << 16);
+                let entryInitialCluster = e._firstCluster;
                 if(entryInitialCluster === 0) {
                     // Root.
                     return CachedDirectory.readyMade(fat, fat.root!.rawDirectoryEntries!.map(e => (e instanceof CachedDirectory) ? e.underlying! : e), 0, e);
@@ -383,11 +383,11 @@ export class LowLevelFatFilesystem {
                 await writingChain.write(data);
             }
             if(remaining > 0) {
-                while(remaining > writingChain.links[writingChain.links.length - 1].length && entry.initialCluster === -1) {
+                while(remaining > writingChain.links[writingChain.links.length - 1].length && entry.initialCluster !== -1) {
                     // Remove the last chain.
                     const lastLink = writingChain.links.splice(writingChain.links.length - 1, 1)[0] as ClusterChainLink;
                     toFree.push(lastLink.index);
-                    this.writeFATClusterEntry!(lastLink.index, this.endOfChain[this.endOfChain.length - 1]);
+                    this.writeFATClusterEntry!(lastLink.index, 0);
                     if(writingChain.links.length) this.writeFATClusterEntry!((writingChain.links[writingChain.links.length - 1] as ClusterChainLink).index, this.endOfChain[this.endOfChain.length - 1]);
                     remaining -= lastLink.length;
                 }

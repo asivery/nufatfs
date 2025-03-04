@@ -69,34 +69,42 @@ export function createFatFSDirectoryEntry(input: Uint8Array, offset?: number): F
         reserved: data[2],
         creationDate: data[3],
         accessedDate: data[4],
-        firstClusterAddressHigh: data[5],
+        unsafeFirstClusterAddressHigh: data[5],
         writtenDate: data[6],
-        firstClusterAddressLow: data[7],
+        unsafeFirstClusterAddressLow: data[7],
         fileSize: data[8],
 
+        _firstCluster: ((data[5] << 16 >>> 0) | (data[7] >>> 0)) >>> 0,
         _filenameStr: textDecoder.decode(data[0]),
         _lfns: 0,
     };
 }
 
 export function newFatFSDirectoryEntry(name83: string, attribs: FatFSDirectoryEntryAttributes, rootCluster: number, fileSize: number): FatFSDirectoryEntry {
+    const firstClusterAddressHigh = (rootCluster & 0xFFFF0000) >>> 16;
+    const firstClusterAddressLow = (rootCluster & 0xFFFF) >>> 0;
     return {
         filename: textEncoder.encode(name83),
         attribs,
         reserved: 0,
         creationDate: new Uint8Array(5).fill(0),
         accessedDate: new Uint8Array(2).fill(0),
-        firstClusterAddressHigh: (rootCluster & 0xFFFF0000) >> 16,
+        unsafeFirstClusterAddressHigh: firstClusterAddressHigh,
         writtenDate: new Uint8Array(4).fill(0),
-        firstClusterAddressLow: rootCluster & 0xFFFF,
+        unsafeFirstClusterAddressLow: firstClusterAddressLow,
         fileSize,
 
+        _firstCluster: rootCluster,
         _filenameStr: name83,
         _lfns: 0,
     };
 }
 
-export function serializeFatFSDirectoryEntry(input: FatFSDirectoryEntry): Uint8Array {
+export function serializeFatFSDirectoryEntry(input: FatFSDirectoryEntry, overrideUnsafeAddresses = true): Uint8Array {
+    if(overrideUnsafeAddresses) {
+        input.unsafeFirstClusterAddressLow = (input._firstCluster & 0xFFFF) >>> 0;
+        input.unsafeFirstClusterAddressHigh = (input._firstCluster & 0xFFFF0000) >>> 16;
+    }
     const data = new Uint8Array(32);
     const dataView = new DataView(data.buffer);
     data.set(input._filenameStr === '' ? input.filename : textEncoder.encode(input._filenameStr), 0);
@@ -104,9 +112,9 @@ export function serializeFatFSDirectoryEntry(input: FatFSDirectoryEntry): Uint8A
     data[12] = input.reserved;
     data.set(input.creationDate, 13);
     data.set(input.accessedDate, 18);
-    dataView.setUint16(20, input.firstClusterAddressHigh, true);
+    dataView.setUint16(20, input.unsafeFirstClusterAddressHigh, true);
     data.set(input.writtenDate, 22);
-    dataView.setUint16(26, input.firstClusterAddressLow, true);
+    dataView.setUint16(26, input.unsafeFirstClusterAddressLow, true);
     dataView.setUint32(28, input.fileSize, true);
     // 28 + 4 = 32
     return data;

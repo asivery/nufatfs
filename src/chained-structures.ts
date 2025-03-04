@@ -130,7 +130,7 @@ export class Chain<T extends ChainLink> {
             if(!this.allocateLink){
                 throw new ChainError("No space!");
             }
-            
+
             let newLinks = await this.allocateLink(this._links[this._links.length - 1] ?? null, (this.cursor + data.length) - wholeChainLength);
             if(!newLinks.length) throw new ChainError("Allocator can't allocate more links!");
 
@@ -139,7 +139,7 @@ export class Chain<T extends ChainLink> {
             // Update cursor
             this.cursor = this.cursor;
         }
-        
+
         let incomingDataCursor = 0;
         while(incomingDataCursor < data.length){
             await this.cacheCurrentLinkForWriting();

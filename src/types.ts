@@ -65,10 +65,11 @@ export interface FatFSDirectoryEntry {
     reserved: number;
     creationDate: Uint8Array;
     accessedDate: Uint8Array;
-    firstClusterAddressHigh: number;
+    unsafeFirstClusterAddressHigh: number;
     writtenDate: Uint8Array;
-    firstClusterAddressLow: number;
+    unsafeFirstClusterAddressLow: number;
     fileSize: number;
     _lfns: number;
+    _firstCluster: number;
 };
 

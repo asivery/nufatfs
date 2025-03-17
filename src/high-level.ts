@@ -1,4 +1,4 @@
-import { CachedDirectory, FatError, FAT_MARKER_DELETED, LowLevelFatFilesystem, CachedFatDirectoryEntry } from "./low-level";
+import { CachedDirectory, FatError, FAT_MARKER_DELETED, LowLevelFatFilesystem, CachedFatDirectoryEntry, FatType } from "./low-level";
 import { Chain } from "./chained-structures";
 import { Driver, FatFSDirectoryEntry, FatFSDirectoryEntryAttributes } from "./types";
 import { nameNormalTo83 } from "./utils";
@@ -8,8 +8,8 @@ import { newFatFSDirectoryEntry } from "./constructors";
 // This class aims to contain the demons stored in LowLevelFatFilesystem.
 export class FatFilesystem {
     private constructor(private fat: LowLevelFatFilesystem){}
-    public static async create(driver: Driver, bypassCoherencyCheck: boolean = false){
-        const fat = await LowLevelFatFilesystem._create(driver, bypassCoherencyCheck);
+    public static async create(driver: Driver, bypassCoherencyCheck: boolean = false, forceFSType?: FatType){
+        const fat = await LowLevelFatFilesystem._create(driver, bypassCoherencyCheck, forceFSType);
         return new FatFilesystem(fat);
     }
 
@@ -153,7 +153,7 @@ export class FatFilesystem {
         if(await parent.findEntry(name)) return;
 
         const rootCluster = this.fat.allocator!.allocate(null, 1)[0];
-        if(!rootCluster || (this.fat.isFat16 && rootCluster.index > 0xFFFF)) {
+        if(!rootCluster || (this.fat.isFat16Or12 && rootCluster.index > 0xFFFF)) {
             throw new Error("Cannot allocate next cluster!");
         }
         // Create the directory entry

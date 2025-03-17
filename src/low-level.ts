@@ -86,6 +86,10 @@ export class CachedDirectory {
     }
 }
 
+export enum FatType {
+    Fat12, Fat16, Fat32
+}
+
 export class LowLevelFatFilesystem {
     bootsectorInfo?: BaseBootSectorInfo;
     fatBootInfo?: FatBootInfo;
@@ -93,15 +97,16 @@ export class LowLevelFatFilesystem {
     fsInfo?: FatFSInformation;
     maxCluster: number = 0;
     maxDataCluster: number = 0;
-    isFat16: boolean = false;
+    fatType: FatType = FatType.Fat16;
+    get isFat16Or12() {
+        return this.fatType === FatType.Fat16 || this.fatType === FatType.Fat12;
+    }
     fat16ClusterAreaOffset = 0;
     root?: CachedDirectory;
     isWritable: boolean;
     endOfChain: number[] = [];
     alteredFATSectors: Set<number> = new Set();
     private fatAltered = false;
-    writeFATClusterEntry?: (number: number, next: number) => void;
-    readFATClusterEntry?: (number: number) => number;
 
     private fatContents?: DataView;
 
@@ -114,38 +119,84 @@ export class LowLevelFatFilesystem {
         // Therefore, we need to decrease the value by two.
         return this.bootsectorInfo!.logicalSectorsPerCluster * (cluster - 2) + this.dataSectorOffset + this.fat16ClusterAreaOffset;
     }
+    readFATClusterEntry(number: number) {
+        if(this.fatType === FatType.Fat12) {
+            const base = Math.floor(number / 2) * 3;
+            const baseContents = (this.fatContents!.getUint16(base, true) | (this.fatContents!.getUint8(base + 2) << 16)) >>> 0;
+
+            if (number & 1) {
+                return (baseContents & 0xFFF000) >>> 12;
+            } else {
+                return (baseContents & 0xFFF) >>> 0;
+            }
+        } else if(this.fatType === FatType.Fat16) {
+            return this.fatContents!.getUint16(number * 2, true);
+        } else {
+            return this.fatContents!.getUint32(number * 4, true);
+        }
+    }
+
+    writeFATClusterEntry(number: number, next: number) {
+        let sector;
+        if(this.fatType === FatType.Fat12) {
+            const base = Math.floor(number / 2) * 3;
+            let baseContents = (this.fatContents!.getUint16(base, true) | (this.fatContents!.getUint8(base + 2) << 16)) >>> 0;
+
+            if (number & 1) {
+                baseContents = baseContents & 0x000FFF | (next << 12);
+            } else {
+                baseContents = baseContents & 0xFFF000 | next;
+            }
+            this.fatContents!.setUint16(base, baseContents & 0xFFFF, true);
+            this.fatContents!.setUint8(base + 2, baseContents >>> 16);
+
+            this.alteredFATSectors.add(Math.floor(base / this.bootsectorInfo!.bytesPerLogicalSector));
+            this.alteredFATSectors.add(Math.floor((base + 2) / this.bootsectorInfo!.bytesPerLogicalSector));
+            this.fatAltered = true;
+            return;
+        } else if(this.fatType === FatType.Fat16) {
+            sector = Math.floor((number * 2) / this.bootsectorInfo!.bytesPerLogicalSector);
+            this.fatContents!.setUint16(number * 2, next, true);
+        } else {
+            sector = Math.floor((number * 4) / this.bootsectorInfo!.bytesPerLogicalSector);
+            this.fatContents!.setUint32(number * 4, next, true);
+        }
+        this.alteredFATSectors.add(sector);
+        this.fatAltered = true;
+    }
 
     private get dataSectorOffset() { return this.bootsectorInfo!.reservedLogicalSectors + this.bootsectorInfo!.fatCount * this.logicalSectorsPerFat };
-    public get logicalSectorsPerFat(){ return this.isFat16 ? this.bootsectorInfo!.deprecatedLogicalSectorsPerFat : this.fat32Extension!.logicalSectorsPerFat }
+    public get logicalSectorsPerFat(){ return this.isFat16Or12 ? this.bootsectorInfo!.deprecatedLogicalSectorsPerFat : this.fat32Extension!.logicalSectorsPerFat }
     public get clusterSizeInBytes() { return this.bootsectorInfo!.logicalSectorsPerCluster * this.bootsectorInfo!.bytesPerLogicalSector; }
 
     private constructor(public driver: Driver){
         this.isWritable = !!driver.writeSectors;
     };
-    private async load(bypassCoherencyCheck: boolean = false){
+    private async load(bypassCoherencyCheck: boolean = false, forceFSType?: FatType) {
         const firstSector = await this.driver.readSectors(0, 1);
         this.bootsectorInfo = createBootSectorInfo(firstSector);
-        this.isFat16 = this.bootsectorInfo.deprecatedLogicalSectorsPerFat !== 0;
-        this.endOfChain = this.isFat16 ? Array(8).fill(0).map((e, i) => 0xFFF8 + i) : Array(8).fill(0).map((e, i) => 0x0FFFFFF8 + i);
-        this.readFATClusterEntry = this.isFat16 ? 
-            (number: number) => this.fatContents!.getUint16(number * 2, true) :
-            (number: number) => this.fatContents!.getUint32(number * 4, true);
-        this.writeFATClusterEntry = (number: number, next: number) => {
-            let sector;
-            if(this.isFat16) {
-                sector = Math.floor((number * 2) / this.bootsectorInfo!.bytesPerLogicalSector);
-                this.fatContents!.setUint16(number * 2, next, true);
-            } else {
-                sector = Math.floor((number * 4) / this.bootsectorInfo!.bytesPerLogicalSector);
-                this.fatContents!.setUint32(number * 4, next, true);
-            }
-            this.alteredFATSectors.add(sector);
-            this.fatAltered = true;
-        }
         let offset = 0x24;
-        if(!this.isFat16){
+        // Fat 12 has to be forced on.
+        if(this.bootsectorInfo.deprecatedLogicalSectorsPerFat === 0){
             this.fat32Extension = createFat32ExtendedInfo(firstSector, offset);
             offset += 28;
+            this.fatType = FatType.Fat32;
+        } else {
+            this.fatType = FatType.Fat16;
+        }
+        if(forceFSType !== undefined) {
+            this.fatType = forceFSType;
+        }
+        switch(this.fatType) {
+            case FatType.Fat12:
+                this.endOfChain = Array(8).fill(0).map((e, i) => 0xFF8 + i);
+                break;
+            case FatType.Fat16:
+                this.endOfChain = Array(8).fill(0).map((e, i) => 0xFFF8 + i);
+                break;
+            case FatType.Fat32:
+                this.endOfChain = Array(8).fill(0).map((e, i) => 0x0FFFFFF8 + i);
+                break;
         }
         this.fatBootInfo = createFatBootInfo(firstSector, offset);
 
@@ -159,10 +210,10 @@ export class LowLevelFatFilesystem {
             this.fatBootInfo.label = textEncoder.encode("NO NAME    ");
             this.fatBootInfo.fsType = textEncoder.encode("FAT16   ");
         }else if(this.fatBootInfo.extendedBootSignature !== 0x29) {
-            throw new FatError(`Found invalid extended boot signature: 0x${this.fatBootInfo.extendedBootSignature.toString(16)}`);
+            console.log(`[NUFATFS]: Warning: Found invalid extended boot signature: 0x${this.fatBootInfo.extendedBootSignature.toString(16)}`);
         }
 
-        if(!this.isFat16){
+        if(this.fatType === FatType.Fat32){
             const fsInfoSector = await this.driver.readSectors(this.fat32Extension!.fsInformationSectorNum, 1);
             this.fsInfo = createFatFsInformation(fsInfoSector);
             if(!(
@@ -185,7 +236,7 @@ export class LowLevelFatFilesystem {
 
         // Carve out space for reserved data. (see clusterToSector for explanation)
         this.maxDataCluster = this.maxCluster - Math.ceil((this.dataSectorOffset + this.fat16ClusterAreaOffset) / this.bootsectorInfo.logicalSectorsPerCluster) - 2;
-        if(this.isFat16){
+        if(this.isFat16Or12){
             this.fat16ClusterAreaOffset = (this.bootsectorInfo.deprecatedMaxRootDirEntries * 32) / this.bootsectorInfo.bytesPerLogicalSector;
         }
         let rawFat = await this.driver.readSectors(this.bootsectorInfo.reservedLogicalSectors, this.logicalSectorsPerFat);
@@ -198,15 +249,15 @@ export class LowLevelFatFilesystem {
                 }
             }
         }
-        
-        this.root = CachedDirectory.readyMade(this, await this.getRootDirectoryData(), this.isFat16 ? -1 : this.fat32Extension!.rootDirCluster, null);
+
+        this.root = CachedDirectory.readyMade(this, await this.getRootDirectoryData(), this.isFat16Or12 ? -1 : this.fat32Extension!.rootDirCluster, null);
         this.allocator = await ClusterAllocator.create(this);
     }
 
     public async getRootDirectoryData(): Promise<FatFSDirectoryEntry[]>{
         // If we're dealing with FAT16, this.dataSectorOffset points to the root directory.
         // Else, read the directory table from 32extension
-        if(this.isFat16){
+        if(this.isFat16Or12){
             let rootSectorLength = (this.bootsectorInfo!.deprecatedMaxRootDirEntries * 32) / this.driver.sectorSize;
             return this.consumeAllDirectoryEntries(await this.driver.readSectors(this.dataSectorOffset, rootSectorLength));
         }else{
@@ -423,9 +474,9 @@ export class LowLevelFatFilesystem {
         return entries ? entries[entries.length - 1] : null;
     }
 
-    public static async _create(driver: Driver, bypassCoherencyCheck: boolean = false){
+    public static async _create(driver: Driver, bypassCoherencyCheck: boolean = false, forceFSType?: FatType){
         const fs = new LowLevelFatFilesystem(driver);
-        await fs.load(bypassCoherencyCheck);
+        await fs.load(bypassCoherencyCheck, forceFSType);
         return fs;
     }
 }
